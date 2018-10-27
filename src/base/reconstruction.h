@@ -1,18 +1,33 @@
-// COLMAP - Structure-from-Motion and Multi-View Stereo.
-// Copyright (C) 2017  Johannes L. Schoenberger <jsch at inf.ethz.ch>
+// Copyright (c) 2018, ETH Zurich and UNC Chapel Hill.
+// All rights reserved.
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
 //
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//
+//     * Neither the name of ETH Zurich and UNC Chapel Hill nor the names of
+//       its contributors may be used to endorse or promote products derived
+//       from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+//
+// Author: Johannes L. Schoenberger (jsch at inf.ethz.ch)
 
 #ifndef COLMAP_SRC_BASE_RECONSTRUCTION_H_
 #define COLMAP_SRC_BASE_RECONSTRUCTION_H_
@@ -24,7 +39,7 @@
 #include <Eigen/Core>
 
 #include "base/camera.h"
-#include "base/database_cache.h"
+#include "base/database.h"
 #include "base/image.h"
 #include "base/point2d.h"
 #include "base/point3d.h"
@@ -33,6 +48,12 @@
 #include "util/types.h"
 
 namespace colmap {
+
+struct PlyPoint;
+struct RANSACOptions;
+class DatabaseCache;
+class CorrespondenceGraph;
+class SimilarityTransform3;
 
 // Reconstruction class holds all information about a single reconstructed
 // model. It is used by the mapping and bundle adjustment classes and can be
@@ -85,9 +106,9 @@ class Reconstruction {
   // Load data from given `DatabaseCache`.
   void Load(const DatabaseCache& database_cache);
 
-  // Setup all relevant data structures before reconstruction. Note that the
-  // scene graph object must live until the `TearDown` method is called.
-  void SetUp(const SceneGraph* scene_graph);
+  // Setup all relevant data structures before reconstruction. Note the
+  // correspondence graph object must live until `TearDown` is called.
+  void SetUp(const CorrespondenceGraph* correspondence_graph);
 
   // Finalize the Reconstruction after the reconstruction has finished.
   //
@@ -105,7 +126,9 @@ class Reconstruction {
   void AddImage(const class Image& image);
 
   // Add new 3D object, and return its unique ID.
-  point3D_t AddPoint3D(const Eigen::Vector3d& xyz, const Track& track);
+  point3D_t AddPoint3D(
+      const Eigen::Vector3d& xyz, const Track& track,
+      const Eigen::Vector3ub& color = Eigen::Vector3ub::Zero());
 
   // Add observation to existing 3D point.
   void AddObservation(const point3D_t point3D_id, const TrackElement& track_el);
@@ -147,15 +170,15 @@ class Reconstruction {
                  const double p1 = 0.9, const bool use_images = true);
 
   // Apply the 3D similarity transformation to all images and points.
-  void Transform(const double scale, const Eigen::Vector4d& qvec,
-                 const Eigen::Vector3d& tvec);
+  void Transform(const SimilarityTransform3& tform);
 
   // Merge the given reconstruction into this reconstruction by registering the
   // images registered in the given but not in this reconstruction and by
   // merging the two clouds and their tracks. The coordinate frames of the two
   // reconstructions are aligned using the projection centers of common
   // registered images. Return true if the two reconstructions could be merged.
-  bool Merge(const Reconstruction& reconstruction, const int min_common_images);
+  bool Merge(const Reconstruction& reconstruction,
+             const double max_reproj_error);
 
   // Align the given reconstruction with a set of pre-defined camera positions.
   // Assuming that locations[i] gives the 3D coordinates of the center
@@ -176,6 +199,10 @@ class Reconstruction {
   //
   // @return            Nullptr if image was not found.
   const class Image* FindImageWithName(const std::string& name) const;
+
+  // Find images that are both present in this and the given reconstruction.
+  std::vector<image_t> FindCommonRegImageIds(
+      const Reconstruction& reconstruction) const;
 
   // Filter 3D points with large reprojection error, negative depth, or
   // insufficient triangulation angle.
@@ -212,18 +239,20 @@ class Reconstruction {
   double ComputeMeanObservationsPerRegImage() const;
   double ComputeMeanReprojectionError() const;
 
-  // Read data from text file.
+  // Read data from text or binary file. Prefer binary data if it exists.
   void Read(const std::string& path);
-  void Read(const std::string& cameras_path, const std::string& images_path,
-            const std::string& points3D_path);
-
-  // Write data to text file.
   void Write(const std::string& path) const;
-  void Write(const std::string& cameras_path, const std::string& images_path,
-             const std::string& points3D_path) const;
-  void WriteCameras(const std::string& path) const;
-  void WriteImages(const std::string& path) const;
-  void WritePoints3D(const std::string& path) const;
+
+  // Read data from binary/text file.
+  void ReadText(const std::string& path);
+  void ReadBinary(const std::string& path);
+
+  // Write data from binary/text file.
+  void WriteText(const std::string& path) const;
+  void WriteBinary(const std::string& path) const;
+
+  // Convert 3D points in reconstruction to PLY point cloud.
+  std::vector<PlyPoint> ConvertToPLY() const;
 
   // Import from other data formats. Note that these import functions are
   // only intended for visualization of data and usable for reconstruction.
@@ -267,9 +296,19 @@ class Reconstruction {
       const double max_reproj_error,
       const std::unordered_set<point3D_t>& point3D_ids);
 
-  void ReadCameras(const std::string& path);
-  void ReadImages(const std::string& path);
-  void ReadPoints3D(const std::string& path);
+  void ReadCamerasText(const std::string& path);
+  void ReadImagesText(const std::string& path);
+  void ReadPoints3DText(const std::string& path);
+  void ReadCamerasBinary(const std::string& path);
+  void ReadImagesBinary(const std::string& path);
+  void ReadPoints3DBinary(const std::string& path);
+
+  void WriteCamerasText(const std::string& path) const;
+  void WriteImagesText(const std::string& path) const;
+  void WritePoints3DText(const std::string& path) const;
+  void WriteCamerasBinary(const std::string& path) const;
+  void WriteImagesBinary(const std::string& path) const;
+  void WritePoints3DBinary(const std::string& path) const;
 
   void SetObservationAsTriangulated(const image_t image_id,
                                     const point2D_t point2D_idx,
@@ -277,7 +316,7 @@ class Reconstruction {
   void ResetTriObservations(const image_t image_id, const point2D_t point2D_idx,
                             const bool is_deleted_point3D);
 
-  const SceneGraph* scene_graph_;
+  const CorrespondenceGraph* correspondence_graph_;
 
   EIGEN_STL_UMAP(camera_t, class Camera) cameras_;
   EIGEN_STL_UMAP(image_t, class Image) images_;
@@ -373,19 +412,19 @@ Reconstruction::ImagePairs() const {
 }
 
 bool Reconstruction::ExistsCamera(const camera_t camera_id) const {
-  return cameras_.count(camera_id) > 0;
+  return cameras_.find(camera_id) != cameras_.end();
 }
 
 bool Reconstruction::ExistsImage(const image_t image_id) const {
-  return images_.count(image_id) > 0;
+  return images_.find(image_id) != images_.end();
 }
 
 bool Reconstruction::ExistsPoint3D(const point3D_t point3D_id) const {
-  return points3D_.count(point3D_id) > 0;
+  return points3D_.find(point3D_id) != points3D_.end();
 }
 
 bool Reconstruction::ExistsImagePair(const image_pair_t pair_id) const {
-  return image_pairs_.count(pair_id) > 0;
+  return image_pairs_.find(pair_id) != image_pairs_.end();
 }
 
 bool Reconstruction::IsImageRegistered(const image_t image_id) const {

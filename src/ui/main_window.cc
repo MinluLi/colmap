@@ -1,18 +1,33 @@
-// COLMAP - Structure-from-Motion and Multi-View Stereo.
-// Copyright (C) 2017  Johannes L. Schoenberger <jsch at inf.ethz.ch>
+// Copyright (c) 2018, ETH Zurich and UNC Chapel Hill.
+// All rights reserved.
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
 //
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//
+//     * Neither the name of ETH Zurich and UNC Chapel Hill nor the names of
+//       its contributors may be used to endorse or promote products derived
+//       from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+//
+// Author: Johannes L. Schoenberger (jsch at inf.ethz.ch)
 
 #include "ui/main_window.h"
 
@@ -41,13 +56,6 @@ MainWindow::MainWindow(const OptionManager& options)
 
 const ReconstructionManager& MainWindow::GetReconstructionManager() const {
   return reconstruction_manager_;
-}
-
-void MainWindow::showEvent(QShowEvent* event) {
-  after_show_event_timer_ = new QTimer(this);
-  connect(after_show_event_timer_, &QTimer::timeout, this,
-          &MainWindow::afterShowEvent);
-  after_show_event_timer_->start(100);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -86,11 +94,9 @@ void MainWindow::closeEvent(QCloseEvent* event) {
   }
 }
 
-void MainWindow::afterShowEvent() { after_show_event_timer_->stop(); }
-
 void MainWindow::CreateWidgets() {
-  opengl_window_ = new OpenGLWindow(this, &options_);
-  setCentralWidget(QWidget::createWindowContainer(opengl_window_));
+  model_viewer_widget_ = new ModelViewerWidget(this, &options_);
+  setCentralWidget(model_viewer_widget_);
 
   project_widget_ = new ProjectWidget(this, &options_);
   project_widget_->SetDatabasePath(*options_.database_path);
@@ -105,7 +111,7 @@ void MainWindow::CreateWidgets() {
   bundle_adjustment_widget_ = new BundleAdjustmentWidget(this, &options_);
   dense_reconstruction_widget_ = new DenseReconstructionWidget(this, &options_);
   render_options_widget_ =
-      new RenderOptionsWidget(this, &options_, opengl_window_);
+      new RenderOptionsWidget(this, &options_, model_viewer_widget_);
   log_widget_ = new LogWidget(this);
   undistortion_widget_ = new UndistortionWidget(this, &options_);
   reconstruction_manager_widget_ =
@@ -179,6 +185,12 @@ void MainWindow::CreateActions() {
                                   tr("Export model as..."), this);
   connect(action_export_as_, &QAction::triggered, this, &MainWindow::ExportAs);
   blocking_actions_.push_back(action_export_as_);
+
+  action_export_as_text_ = new QAction(QIcon(":/media/export-as-text.png"),
+                                       tr("Export model as text"), this);
+  connect(action_export_as_text_, &QAction::triggered, this,
+          &MainWindow::ExportAsText);
+  blocking_actions_.push_back(action_export_as_text_);
 
   action_quit_ = new QAction(tr("Quit"), this);
   connect(action_quit_, &QAction::triggered, this, &MainWindow::close);
@@ -282,8 +294,8 @@ void MainWindow::CreateActions() {
 
   action_render_reset_view_ = new QAction(
       QIcon(":/media/render-reset-view.png"), tr("Reset view"), this);
-  connect(action_render_reset_view_, &QAction::triggered, opengl_window_,
-          &OpenGLWindow::ResetView);
+  connect(action_render_reset_view_, &QAction::triggered, model_viewer_widget_,
+          &ModelViewerWidget::ResetView);
 
   action_render_options_ = new QAction(QIcon(":/media/render-options.png"),
                                        tr("Render options"), this);
@@ -321,8 +333,8 @@ void MainWindow::CreateActions() {
 
   action_grab_movie_ =
       new QAction(QIcon(":/media/grab-movie.png"), tr("Grab movie"), this);
-  connect(action_grab_movie_, &QAction::triggered, opengl_window_,
-          &OpenGLWindow::GrabMovie);
+  connect(action_grab_movie_, &QAction::triggered, model_viewer_widget_,
+          &ModelViewerWidget::GrabMovie);
 
   action_undistort_ =
       new QAction(QIcon(":/media/undistort.png"), tr("Undistortion"), this);
@@ -334,24 +346,13 @@ void MainWindow::CreateActions() {
   connect(action_extract_colors_, &QAction::triggered, this,
           &MainWindow::ExtractColors);
 
+  action_set_options_ = new QAction(tr("Set options for ..."), this);
+  connect(action_set_options_, &QAction::triggered, this,
+          &MainWindow::SetOptions);
+
   action_reset_options_ = new QAction(tr("Set default options"), this);
   connect(action_reset_options_, &QAction::triggered, this,
           &MainWindow::ResetOptions);
-
-  action_set_options_for_individual_ =
-      new QAction(tr("Set options for individual images"), this);
-  connect(action_set_options_for_individual_, &QAction::triggered, this,
-          &MainWindow::SetOptionsForIndividual);
-
-  action_set_options_for_video_ =
-      new QAction(tr("Set options for video frames"), this);
-  connect(action_set_options_for_video_, &QAction::triggered, this,
-          &MainWindow::SetOptionsForVideo);
-
-  action_set_options_for_internet_ =
-      new QAction(tr("Set options for Internet images"), this);
-  connect(action_set_options_for_internet_, &QAction::triggered, this,
-          &MainWindow::SetOptionsForInternet);
 
   //////////////////////////////////////////////////////////////////////////////
   // Misc actions
@@ -359,17 +360,17 @@ void MainWindow::CreateActions() {
 
   action_render_ = new QAction(tr("Render"), this);
   connect(action_render_, &QAction::triggered, this, &MainWindow::Render,
-          Qt::QueuedConnection);
+          Qt::BlockingQueuedConnection);
 
   action_render_now_ = new QAction(tr("Render now"), this);
   render_options_widget_->action_render_now = action_render_now_;
   connect(action_render_now_, &QAction::triggered, this, &MainWindow::RenderNow,
-          Qt::QueuedConnection);
+          Qt::BlockingQueuedConnection);
 
   action_reconstruction_finish_ =
       new QAction(tr("Finish reconstruction"), this);
   connect(action_reconstruction_finish_, &QAction::triggered, this,
-          &MainWindow::ReconstructionFinish, Qt::QueuedConnection);
+          &MainWindow::ReconstructionFinish, Qt::BlockingQueuedConnection);
 
   action_about_ = new QAction(tr("About"), this);
   connect(action_about_, &QAction::triggered, this, &MainWindow::About);
@@ -397,6 +398,7 @@ void MainWindow::CreateMenus() {
   file_menu->addAction(action_export_);
   file_menu->addAction(action_export_all_);
   file_menu->addAction(action_export_as_);
+  file_menu->addAction(action_export_as_text_);
   file_menu->addSeparator();
   file_menu->addAction(action_quit_);
   menuBar()->addAction(file_menu->menuAction());
@@ -439,10 +441,8 @@ void MainWindow::CreateMenus() {
   extras_menu->addAction(action_undistort_);
   extras_menu->addAction(action_extract_colors_);
   extras_menu->addSeparator();
+  extras_menu->addAction(action_set_options_);
   extras_menu->addAction(action_reset_options_);
-  extras_menu->addAction(action_set_options_for_individual_);
-  extras_menu->addAction(action_set_options_for_video_);
-  extras_menu->addAction(action_set_options_for_internet_);
   menuBar()->addAction(extras_menu->menuAction());
 
   QMenu* help_menu = new QMenu(tr("Help"), this);
@@ -512,11 +512,11 @@ void MainWindow::CreateStatusbar() {
   connect(statusbar_timer_, &QTimer::timeout, this, &MainWindow::UpdateTimer);
   statusbar_timer_->start(1000);
 
-  opengl_window_->statusbar_status_label =
+  model_viewer_widget_->statusbar_status_label =
       new QLabel("0 Images - 0 Points", this);
-  opengl_window_->statusbar_status_label->setFont(font);
-  opengl_window_->statusbar_status_label->setAlignment(Qt::AlignCenter);
-  statusBar()->addWidget(opengl_window_->statusbar_status_label, 1);
+  model_viewer_widget_->statusbar_status_label->setFont(font);
+  model_viewer_widget_->statusbar_status_label->setAlignment(Qt::AlignCenter);
+  statusBar()->addWidget(model_viewer_widget_->statusbar_status_label, 1);
 }
 
 void MainWindow::CreateControllers() {
@@ -635,28 +635,32 @@ void MainWindow::ProjectSaveAs() {
 }
 
 void MainWindow::Import() {
-  const std::string path =
+  const std::string import_path =
       QFileDialog::getExistingDirectory(this, tr("Select source..."), "",
                                         QFileDialog::ShowDirsOnly)
           .toUtf8()
           .constData();
 
   // Selection canceled?
-  if (path == "") {
+  if (import_path == "") {
     return;
   }
 
-  const std::string project_path = JoinPaths(path, "project.ini");
-  const std::string cameras_path = JoinPaths(path, "cameras.txt");
-  const std::string images_path = JoinPaths(path, "images.txt");
-  const std::string points3D_path = JoinPaths(path, "points3D.txt");
+  const std::string project_path = JoinPaths(import_path, "project.ini");
+  const std::string cameras_bin_path = JoinPaths(import_path, "cameras.bin");
+  const std::string images_bin_path = JoinPaths(import_path, "images.bin");
+  const std::string points3D_bin_path = JoinPaths(import_path, "points3D.bin");
+  const std::string cameras_txt_path = JoinPaths(import_path, "cameras.txt");
+  const std::string images_txt_path = JoinPaths(import_path, "images.txt");
+  const std::string points3D_txt_path = JoinPaths(import_path, "points3D.txt");
 
-  if (!ExistsFile(cameras_path) || !ExistsFile(images_path) ||
-      !ExistsFile(points3D_path)) {
+  if ((!ExistsFile(cameras_bin_path) || !ExistsFile(images_bin_path) ||
+       !ExistsFile(points3D_bin_path)) &&
+      (!ExistsFile(cameras_txt_path) || !ExistsFile(images_txt_path) ||
+       !ExistsFile(points3D_txt_path))) {
     QMessageBox::critical(this, "",
-                          tr("`cameras.txt`, `images.txt` and "
-                             "`points3D.txt` must exist in the chosen "
-                             "directory."));
+                          tr("cameras, images, and points3D files do not exist "
+                             "in chosen directory."));
     return;
   }
 
@@ -670,10 +674,10 @@ void MainWindow::Import() {
   } else {
     QMessageBox::StandardButton reply = QMessageBox::question(
         this, "",
-        tr("Directory does not contain a `project.ini`. To "
+        tr("Directory does not contain a <i>project.ini</i>. To "
            "resume the reconstruction, you need to specify a valid "
            "database and image path. Do you want to select the paths "
-           "now (or press 'No' to only visualize the reconstruction)?"),
+           "now (or press <i>No</i> to only visualize the reconstruction)?"),
         QMessageBox::Yes | QMessageBox::No);
     if (reply == QMessageBox::Yes) {
       edit_project = true;
@@ -681,8 +685,8 @@ void MainWindow::Import() {
   }
 
   thread_control_widget_->StartFunction(
-      "Importing...", [this, path, edit_project]() {
-        const size_t idx = reconstruction_manager_.Read(path);
+      "Importing...", [this, import_path, edit_project]() {
+        const size_t idx = reconstruction_manager_.Read(import_path);
         reconstruction_manager_widget_->Update();
         reconstruction_manager_widget_->SelectReconstruction(idx);
         action_bundle_adjustment_->setEnabled(true);
@@ -694,30 +698,30 @@ void MainWindow::Import() {
 }
 
 void MainWindow::ImportFrom() {
-  const std::string path =
+  const std::string import_path =
       QFileDialog::getOpenFileName(this, tr("Select source..."), "")
           .toUtf8()
           .constData();
 
   // Selection canceled?
-  if (path == "") {
+  if (import_path == "") {
     return;
   }
 
-  if (!ExistsFile(path)) {
+  if (!ExistsFile(import_path)) {
     QMessageBox::critical(this, "", tr("Invalid file"));
     return;
   }
 
-  if (!HasFileExtension(path, ".ply")) {
+  if (!HasFileExtension(import_path, ".ply")) {
     QMessageBox::critical(this, "",
                           tr("Invalid file format (supported formats: PLY)"));
     return;
   }
 
-  thread_control_widget_->StartFunction("Importing...", [this, path]() {
+  thread_control_widget_->StartFunction("Importing...", [this, import_path]() {
     const size_t reconstruction_idx = reconstruction_manager_.Add();
-    reconstruction_manager_.Get(reconstruction_idx).ImportPLY(path);
+    reconstruction_manager_.Get(reconstruction_idx).ImportPLY(import_path);
     options_.render->min_track_len = 0;
     reconstruction_manager_widget_->Update();
     reconstruction_manager_widget_->SelectReconstruction(reconstruction_idx);
@@ -725,50 +729,40 @@ void MainWindow::ImportFrom() {
   });
 }
 
-void MainWindow::ImportFusedPoints(const std::vector<mvs::FusedPoint>& points) {
-  const size_t reconstruction_idx = reconstruction_manager_.Add();
-  auto& reconstruction = reconstruction_manager_.Get(reconstruction_idx);
-
-  for (const auto& point : points) {
-    const Eigen::Vector3d xyz(point.x, point.y, point.z);
-    const point3D_t point3D_id = reconstruction.AddPoint3D(xyz, Track());
-    const Eigen::Vector3ub rgb(point.r, point.g, point.b);
-    reconstruction.Point3D(point3D_id).SetColor(rgb);
-  }
-
-  options_.render->min_track_len = 0;
-  reconstruction_manager_widget_->Update();
-  reconstruction_manager_widget_->SelectReconstruction(reconstruction_idx);
-  RenderNow();
-}
-
 void MainWindow::Export() {
   if (!IsSelectedReconstructionValid()) {
     return;
   }
 
-  const std::string path =
+  const std::string export_path =
       QFileDialog::getExistingDirectory(this, tr("Select destination..."), "",
                                         QFileDialog::ShowDirsOnly)
           .toUtf8()
           .constData();
 
   // Selection canceled?
-  if (path == "") {
+  if (export_path == "") {
     return;
   }
 
-  const std::string project_path = JoinPaths(path, "project.ini");
-  const std::string cameras_path = JoinPaths(path, "cameras.txt");
-  const std::string images_path = JoinPaths(path, "images.txt");
-  const std::string points3D_path = JoinPaths(path, "points3D.txt");
+  const std::string cameras_name = "cameras.bin";
+  const std::string images_name = "images.bin";
+  const std::string points3D_name = "points3D.bin";
 
-  if (ExistsFile(project_path) || ExistsFile(cameras_path) ||
-      ExistsFile(images_path) || ExistsFile(points3D_path)) {
+  const std::string project_path = JoinPaths(export_path, "project.ini");
+  const std::string cameras_path = JoinPaths(export_path, cameras_name);
+  const std::string images_path = JoinPaths(export_path, images_name);
+  const std::string points3D_path = JoinPaths(export_path, points3D_name);
+
+  if (ExistsFile(cameras_path) || ExistsFile(images_path) ||
+      ExistsFile(points3D_path)) {
     QMessageBox::StandardButton reply = QMessageBox::question(
         this, "",
-        tr("The files `cameras.txt`, `images.txt`, or `points3D.txt` already "
-           "exist in the selected destination. Do you want to overwrite them?"),
+        StringPrintf(
+            "The files <i>%s</i>, <i>%s</i>, or <i>%s</i> already "
+            "exist in the selected destination. Do you want to overwrite them?",
+            cameras_name.c_str(), images_name.c_str(), points3D_name.c_str())
+            .c_str(),
         QMessageBox::Yes | QMessageBox::No);
     if (reply == QMessageBox::No) {
       return;
@@ -776,8 +770,10 @@ void MainWindow::Export() {
   }
 
   thread_control_widget_->StartFunction(
-      "Exporting...", [this, path, project_path]() {
-        reconstruction_manager_.Get(SelectedReconstructionIdx()).Write(path);
+      "Exporting...", [this, export_path, project_path]() {
+        const auto& reconstruction =
+            reconstruction_manager_.Get(SelectedReconstructionIdx());
+        reconstruction.WriteBinary(export_path);
         options_.Write(project_path);
       });
 }
@@ -787,19 +783,19 @@ void MainWindow::ExportAll() {
     return;
   }
 
-  const std::string path =
+  const std::string export_path =
       QFileDialog::getExistingDirectory(this, tr("Select destination..."), "",
                                         QFileDialog::ShowDirsOnly)
           .toUtf8()
           .constData();
 
   // Selection canceled?
-  if (path == "") {
+  if (export_path == "") {
     return;
   }
 
-  thread_control_widget_->StartFunction("Exporting...", [this, path]() {
-    reconstruction_manager_.Write(path, &options_);
+  thread_control_widget_->StartFunction("Exporting...", [this, export_path]() {
+    reconstruction_manager_.Write(export_path, &options_);
   });
 }
 
@@ -809,7 +805,7 @@ void MainWindow::ExportAs() {
   }
 
   QString filter("NVM (*.nvm)");
-  const std::string path =
+  const std::string export_path =
       QFileDialog::getSaveFileName(
           this, tr("Select destination..."), "",
           "NVM (*.nvm);;Bundler (*.out);;PLY (*.ply);;VRML (*.wrl)", &filter)
@@ -817,26 +813,77 @@ void MainWindow::ExportAs() {
           .constData();
 
   // Selection canceled?
-  if (path == "") {
+  if (export_path == "") {
     return;
   }
 
-  thread_control_widget_->StartFunction("Exporting...", [this, path, filter]() {
-    const Reconstruction& reconstruction =
-        reconstruction_manager_.Get(SelectedReconstructionIdx());
-    if (filter == "NVM (*.nvm)") {
-      reconstruction.ExportNVM(path);
-    } else if (filter == "Bundler (*.out)") {
-      reconstruction.ExportBundler(path, path + ".list.txt");
-    } else if (filter == "PLY (*.ply)") {
-      reconstruction.ExportPLY(path);
-    } else if (filter == "VRML (*.wrl)") {
-      const auto base_path = path.substr(0, path.find_last_of("."));
-      reconstruction.ExportVRML(base_path + ".images.wrl",
-                                base_path + ".points3D.wrl", 1,
-                                Eigen::Vector3d(1, 0, 0));
+  thread_control_widget_->StartFunction(
+      "Exporting...", [this, export_path, filter]() {
+        const Reconstruction& reconstruction =
+            reconstruction_manager_.Get(SelectedReconstructionIdx());
+        if (filter == "NVM (*.nvm)") {
+          reconstruction.ExportNVM(export_path);
+        } else if (filter == "Bundler (*.out)") {
+          reconstruction.ExportBundler(export_path, export_path + ".list.txt");
+        } else if (filter == "PLY (*.ply)") {
+          reconstruction.ExportPLY(export_path);
+        } else if (filter == "VRML (*.wrl)") {
+          const auto base_path =
+              export_path.substr(0, export_path.find_last_of("."));
+          reconstruction.ExportVRML(base_path + ".images.wrl",
+                                    base_path + ".points3D.wrl", 1,
+                                    Eigen::Vector3d(1, 0, 0));
+        }
+      });
+}
+
+void MainWindow::ExportAsText() {
+  if (!IsSelectedReconstructionValid()) {
+    return;
+  }
+
+  const std::string export_path =
+      QFileDialog::getExistingDirectory(this, tr("Select destination..."), "",
+                                        QFileDialog::ShowDirsOnly)
+          .toUtf8()
+          .constData();
+
+  // Selection canceled?
+  if (export_path == "") {
+    return;
+  }
+
+  const std::string cameras_name = "cameras.txt";
+  const std::string images_name = "images.txt";
+  const std::string points3D_name = "points3D.txt";
+
+  const std::string project_path = JoinPaths(export_path, "project.ini");
+  const std::string cameras_path = JoinPaths(export_path, cameras_name);
+  const std::string images_path = JoinPaths(export_path, images_name);
+  const std::string points3D_path = JoinPaths(export_path, points3D_name);
+
+  if (ExistsFile(cameras_path) || ExistsFile(images_path) ||
+      ExistsFile(points3D_path)) {
+    QMessageBox::StandardButton reply = QMessageBox::question(
+        this, "",
+        StringPrintf(
+            "The files <i>%s</i>, <i>%s</i>, or <i>%s</i> already "
+            "exist in the selected destination. Do you want to overwrite them?",
+            cameras_name.c_str(), images_name.c_str(), points3D_name.c_str())
+            .c_str(),
+        QMessageBox::Yes | QMessageBox::No);
+    if (reply == QMessageBox::No) {
+      return;
     }
-  });
+  }
+
+  thread_control_widget_->StartFunction(
+      "Exporting...", [this, export_path, project_path]() {
+        const auto& reconstruction =
+            reconstruction_manager_.Get(SelectedReconstructionIdx());
+        reconstruction.WriteText(export_path);
+        options_.Write(project_path);
+      });
 }
 
 void MainWindow::FeatureExtraction() {
@@ -982,8 +1029,7 @@ void MainWindow::BundleAdjustment() {
   }
 
   bundle_adjustment_widget_->Show(
-      &reconstruction_manager_.Get(SelectedReconstructionIdx()),
-      action_render_now_);
+      &reconstruction_manager_.Get(SelectedReconstructionIdx()));
 }
 
 void MainWindow::DenseReconstruction() {
@@ -1033,15 +1079,15 @@ void MainWindow::RenderSelectedReconstruction() {
   }
 
   const size_t reconstruction_idx = SelectedReconstructionIdx();
-  opengl_window_->reconstruction =
+  model_viewer_widget_->reconstruction =
       &reconstruction_manager_.Get(reconstruction_idx);
-  opengl_window_->Update();
+  model_viewer_widget_->ReloadReconstruction();
 }
 
 void MainWindow::RenderClear() {
   reconstruction_manager_widget_->SelectReconstruction(
       ReconstructionManagerWidget::kNewestReconstructionIdx);
-  opengl_window_->Clear();
+  model_viewer_widget_->ClearReconstruction();
 }
 
 void MainWindow::RenderOptions() {
@@ -1093,7 +1139,7 @@ void MainWindow::GrabImage() {
         !HasFileExtension(file_name.toUtf8().constData(), ".jpg")) {
       file_name += ".png";
     }
-    QImage image = opengl_window_->GrabImage();
+    QImage image = model_viewer_widget_->GrabImage();
     image.save(file_name);
   }
 }
@@ -1137,59 +1183,59 @@ void MainWindow::ExtractColors() {
   });
 }
 
+void MainWindow::SetOptions() {
+  QStringList data_items;
+  data_items << "Individual images"
+             << "Video frames"
+             << "Internet images";
+  bool data_ok;
+  const QString data_item =
+      QInputDialog::getItem(this, "", "Data:", data_items, 0, false, &data_ok);
+  if (!data_ok) {
+    return;
+  }
+
+  QStringList quality_items;
+  quality_items << "Low"
+                << "Medium"
+                << "High"
+                << "Extreme";
+  bool quality_ok;
+  const QString quality_item = QInputDialog::getItem(
+      this, "", "Quality:", quality_items, 2, false, &quality_ok);
+  if (!quality_ok) {
+    return;
+  }
+
+  const bool kResetPaths = false;
+  options_.ResetOptions(kResetPaths);
+
+  if (data_item == "Individual images") {
+    options_.ModifyForIndividualData();
+  } else if (data_item == "Video frames") {
+    options_.ModifyForVideoData();
+  } else if (data_item == "Internet images") {
+    options_.ModifyForInternetData();
+  } else {
+    LOG(FATAL) << "Data type does not exist";
+  }
+
+  if (quality_item == "Low") {
+    options_.ModifyForLowQuality();
+  } else if (quality_item == "Medium") {
+    options_.ModifyForMediumQuality();
+  } else if (quality_item == "High") {
+    options_.ModifyForHighQuality();
+  } else if (quality_item == "Extreme") {
+    options_.ModifyForExtremeQuality();
+  } else {
+    LOG(FATAL) << "Quality level does not exist";
+  }
+}
+
 void MainWindow::ResetOptions() {
-  const std::string project_path = *options_.project_path;
-  const std::string image_path = *options_.image_path;
-  const std::string database_path = *options_.database_path;
-
-  options_.Reset();
-  options_.AddAllOptions();
-
-  *options_.project_path = project_path;
-  *options_.image_path = image_path;
-  *options_.database_path = database_path;
-}
-
-void MainWindow::SetOptionsForIndividual() {
-  const std::string project_path = *options_.project_path;
-  const std::string image_path = *options_.image_path;
-  const std::string database_path = *options_.database_path;
-
-  options_.Reset();
-  options_.AddAllOptions();
-  options_.InitForIndividualData();
-
-  *options_.project_path = project_path;
-  *options_.image_path = image_path;
-  *options_.database_path = database_path;
-}
-
-void MainWindow::SetOptionsForVideo() {
-  const std::string project_path = *options_.project_path;
-  const std::string image_path = *options_.image_path;
-  const std::string database_path = *options_.database_path;
-
-  options_.Reset();
-  options_.AddAllOptions();
-  options_.InitForVideoData();
-
-  *options_.project_path = project_path;
-  *options_.image_path = image_path;
-  *options_.database_path = database_path;
-}
-
-void MainWindow::SetOptionsForInternet() {
-  const std::string project_path = *options_.project_path;
-  const std::string image_path = *options_.image_path;
-  const std::string database_path = *options_.database_path;
-
-  options_.Reset();
-  options_.AddAllOptions();
-  options_.InitForInternetData();
-
-  *options_.project_path = project_path;
-  *options_.image_path = image_path;
-  *options_.database_path = database_path;
+  const bool kResetPaths = false;
+  options_.ResetOptions(kResetPaths);
 }
 
 void MainWindow::About() {
@@ -1237,7 +1283,9 @@ void MainWindow::UpdateTimer() {
 }
 
 void MainWindow::ShowInvalidProjectError() {
-  QMessageBox::critical(this, "", tr("Invalid project options"));
+  QMessageBox::critical(this, "",
+                        tr("You must create a valid project using: <i>File > "
+                           "New project</i> or <i>File > Edit project</i>"));
 }
 
 void MainWindow::EnableBlockingActions() {

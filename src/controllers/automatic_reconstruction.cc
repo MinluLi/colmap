@@ -1,26 +1,42 @@
-// COLMAP - Structure-from-Motion and Multi-View Stereo.
-// Copyright (C) 2017  Johannes L. Schoenberger <jsch at inf.ethz.ch>
+// Copyright (c) 2018, ETH Zurich and UNC Chapel Hill.
+// All rights reserved.
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
 //
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//
+//     * Neither the name of ETH Zurich and UNC Chapel Hill nor the names of
+//       its contributors may be used to endorse or promote products derived
+//       from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+//
+// Author: Johannes L. Schoenberger (jsch at inf.ethz.ch)
 
 #include "controllers/automatic_reconstruction.h"
 
-#include "base/feature_extraction.h"
-#include "base/feature_matching.h"
 #include "base/undistortion.h"
 #include "controllers/incremental_mapper.h"
+#include "feature/extraction.h"
+#include "feature/matching.h"
 #include "mvs/fusion.h"
+#include "mvs/meshing.h"
 #include "mvs/patch_match.h"
 #include "util/misc.h"
 #include "util/option_manager.h"
@@ -43,50 +59,47 @@ AutomaticReconstructionController::AutomaticReconstructionController(
       JoinPaths(options_.workspace_path, "database.db");
 
   if (options_.data_type == DataType::VIDEO) {
-    option_manager_.InitForVideoData();
+    option_manager_.ModifyForVideoData();
   } else if (options_.data_type == DataType::INDIVIDUAL) {
-    option_manager_.InitForIndividualData();
+    option_manager_.ModifyForIndividualData();
   } else if (options_.data_type == DataType::INTERNET) {
-    option_manager_.InitForInternetData();
+    option_manager_.ModifyForInternetData();
   } else {
     LOG(FATAL) << "Data type not supported";
   }
 
-  if (!options_.high_quality) {
-    option_manager_.sift_extraction->max_image_size = 1000;
-    option_manager_.sequential_matching->loop_detection_num_images /= 2;
-    option_manager_.vocab_tree_matching->num_images /= 2;
-    option_manager_.mapper->ba_local_max_num_iterations /= 2;
-    option_manager_.mapper->ba_global_max_num_iterations /= 2;
-    option_manager_.mapper->ba_global_images_ratio *= 1.2;
-    option_manager_.mapper->ba_global_points_ratio *= 1.2;
-    option_manager_.mapper->ba_global_max_refinements = 2;
-    option_manager_.dense_stereo->max_image_size = 1000;
-    option_manager_.dense_stereo->window_radius = 4;
-    option_manager_.dense_stereo->num_samples /= 2;
-    option_manager_.dense_stereo->num_iterations = 3;
+  CHECK(ExistsCameraModelWithName(options_.camera_model));
+
+  if (options_.quality == Quality::LOW) {
+    option_manager_.ModifyForLowQuality();
+  } else if (options_.quality == Quality::MEDIUM) {
+    option_manager_.ModifyForMediumQuality();
+  } else if (options_.quality == Quality::HIGH) {
+    option_manager_.ModifyForHighQuality();
+  } else if (options_.quality == Quality::EXTREME) {
+    option_manager_.ModifyForExtremeQuality();
   }
 
-  ImageReader::Options reader_options = *option_manager_.image_reader;
+  option_manager_.sift_extraction->num_threads = options_.num_threads;
+  option_manager_.sift_matching->num_threads = options_.num_threads;
+  option_manager_.mapper->num_threads = options_.num_threads;
+  option_manager_.poisson_meshing->num_threads = options_.num_threads;
+
+  ImageReaderOptions reader_options = *option_manager_.image_reader;
   reader_options.database_path = *option_manager_.database_path;
   reader_options.image_path = *option_manager_.image_path;
   reader_options.single_camera = options_.single_camera;
+  reader_options.camera_model = options_.camera_model;
 
+  option_manager_.sift_extraction->use_gpu = options_.use_gpu;
   option_manager_.sift_matching->use_gpu = options_.use_gpu;
 
-  if (options_.use_gpu) {
-    if (!options_.use_opengl) {
-      option_manager_.sift_gpu_extraction->index = 0;
-    }
+  option_manager_.sift_extraction->gpu_index = options_.gpu_index;
+  option_manager_.sift_matching->gpu_index = options_.gpu_index;
+  option_manager_.patch_match_stereo->gpu_index = options_.gpu_index;
 
-    feature_extractor_.reset(new SiftGPUFeatureExtractor(
-        reader_options, *option_manager_.sift_extraction,
-        *option_manager_.sift_gpu_extraction));
-  } else {
-    feature_extractor_.reset(new SiftCPUFeatureExtractor(
-        reader_options, *option_manager_.sift_extraction,
-        *option_manager_.sift_cpu_extraction));
-  }
+  feature_extractor_.reset(new SiftFeatureExtractor(
+      reader_options, *option_manager_.sift_extraction));
 
   exhaustive_matcher_.reset(new ExhaustiveFeatureMatcher(
       *option_manager_.exhaustive_matching, *option_manager_.sift_matching,
@@ -153,6 +166,7 @@ void AutomaticReconstructionController::RunFeatureExtraction() {
   active_thread_ = feature_extractor_.get();
   feature_extractor_->Start();
   feature_extractor_->Wait();
+  feature_extractor_.reset();
   active_thread_ = nullptr;
 }
 
@@ -175,11 +189,28 @@ void AutomaticReconstructionController::RunFeatureMatching() {
   active_thread_ = matcher;
   matcher->Start();
   matcher->Wait();
+  exhaustive_matcher_.reset();
+  sequential_matcher_.reset();
+  vocab_tree_matcher_.reset();
   active_thread_ = nullptr;
 }
 
 void AutomaticReconstructionController::RunSparseMapper() {
-  CreateDirIfNotExists(JoinPaths(options_.workspace_path, "sparse"));
+  const auto sparse_path = JoinPaths(options_.workspace_path, "sparse");
+  if (ExistsDir(sparse_path)) {
+    auto dir_list = GetDirList(sparse_path);
+    std::sort(dir_list.begin(), dir_list.end());
+    if (dir_list.size() > 0) {
+      std::cout << std::endl
+                << "WARNING: Skipping sparse reconstruction because it is "
+                   "already computed"
+                << std::endl;
+      for (const auto& dir : dir_list) {
+        reconstruction_manager_->Read(dir);
+      }
+      return;
+    }
+  }
 
   IncrementalMapperController mapper(
       option_manager_.mapper.get(), *option_manager_.image_path,
@@ -189,17 +220,18 @@ void AutomaticReconstructionController::RunSparseMapper() {
   mapper.Wait();
   active_thread_ = nullptr;
 
-  reconstruction_manager_->Write(JoinPaths(options_.workspace_path, "sparse"),
-                                 &option_manager_);
+  CreateDirIfNotExists(sparse_path);
+  reconstruction_manager_->Write(sparse_path, &option_manager_);
 }
 
 void AutomaticReconstructionController::RunDenseMapper() {
 #ifndef CUDA_ENABLED
   std::cout
-      << "WARNING: Skipping dense reconstruction because CUDA is not available"
+      << std::endl
+      << "WARNING: Skipping dense reconstruction because CUDA is not available."
       << std::endl;
   return;
-#endif
+#endif  // CUDA_ENABLED
 
   CreateDirIfNotExists(JoinPaths(options_.workspace_path, "dense"));
 
@@ -210,56 +242,45 @@ void AutomaticReconstructionController::RunDenseMapper() {
 
     const std::string dense_path =
         JoinPaths(options_.workspace_path, "dense", std::to_string(i));
-    CreateDirIfNotExists(dense_path);
+    const std::string fused_path = JoinPaths(dense_path, "fused.ply");
+
+    std::string meshing_path;
+    if (options_.mesher == Mesher::POISSON) {
+      meshing_path = JoinPaths(dense_path, "meshed-poisson.ply");
+    } else if (options_.mesher == Mesher::DELAUNAY) {
+      meshing_path = JoinPaths(dense_path, "meshed-delaunay.ply");
+    }
+
+    if (ExistsFile(fused_path) && ExistsFile(meshing_path)) {
+      continue;
+    }
 
     // Image undistortion.
 
-    UndistortCameraOptions undistortion_options;
-    undistortion_options.max_image_size =
-        option_manager_.dense_stereo->max_image_size;
-    COLMAPUndistorter undistorter(undistortion_options,
-                                  reconstruction_manager_->Get(i),
-                                  *option_manager_.image_path, dense_path);
-    active_thread_ = &undistorter;
-    undistorter.Start();
-    undistorter.Wait();
-    active_thread_ = nullptr;
+    if (!ExistsDir(dense_path)) {
+      CreateDirIfNotExists(dense_path);
+
+      UndistortCameraOptions undistortion_options;
+      undistortion_options.max_image_size =
+          option_manager_.patch_match_stereo->max_image_size;
+      COLMAPUndistorter undistorter(undistortion_options,
+                                    reconstruction_manager_->Get(i),
+                                    *option_manager_.image_path, dense_path);
+      active_thread_ = &undistorter;
+      undistorter.Start();
+      undistorter.Wait();
+      active_thread_ = nullptr;
+    }
 
     if (IsStopped()) {
       return;
     }
 
-    // Dense stereo
+    // Patch match stereo.
 
-    if (options_.high_quality) {
-      // Photometric stereo.
-      option_manager_.dense_stereo->filter = false;
-      option_manager_.dense_stereo->geom_consistency = false;
-      mvs::PatchMatchController photometric_patch_match_controller(
-          *option_manager_.dense_stereo, dense_path, "COLMAP", "");
-      active_thread_ = &photometric_patch_match_controller;
-      photometric_patch_match_controller.Start();
-      photometric_patch_match_controller.Wait();
-      active_thread_ = nullptr;
-
-      if (IsStopped()) {
-        return;
-      }
-
-      // Geometric stereo.
-      option_manager_.dense_stereo->filter = true;
-      option_manager_.dense_stereo->geom_consistency = true;
-      mvs::PatchMatchController geometric_patch_match_controller(
-          *option_manager_.dense_stereo, dense_path, "COLMAP", "");
-      active_thread_ = &geometric_patch_match_controller;
-      geometric_patch_match_controller.Start();
-      geometric_patch_match_controller.Wait();
-      active_thread_ = nullptr;
-    } else {
-      option_manager_.dense_stereo->filter = true;
-      option_manager_.dense_stereo->geom_consistency = false;
+    {
       mvs::PatchMatchController patch_match_controller(
-          *option_manager_.dense_stereo, dense_path, "COLMAP", "");
+          *option_manager_.patch_match_stereo, dense_path, "COLMAP", "");
       active_thread_ = &patch_match_controller;
       patch_match_controller.Start();
       patch_match_controller.Wait();
@@ -270,38 +291,50 @@ void AutomaticReconstructionController::RunDenseMapper() {
       return;
     }
 
-    // Dense fusion.
+    // Stereo fusion.
 
-    std::string fusion_input_type;
-    if (options_.high_quality) {
-      fusion_input_type = "geometric";
-    } else {
-      fusion_input_type = "photometric";
-    }
-
-    {
-      mvs::StereoFusion fuser(*option_manager_.dense_fusion, dense_path,
-                              "COLMAP", fusion_input_type);
+    if (!ExistsFile(fused_path)) {
+      auto fusion_options = *option_manager_.stereo_fusion;
+      const int num_reg_images = reconstruction_manager_->Get(i).NumRegImages();
+      fusion_options.min_num_pixels =
+          std::min(num_reg_images + 1, fusion_options.min_num_pixels);
+      mvs::StereoFusion fuser(
+          fusion_options, dense_path, "COLMAP", "",
+          options_.quality == Quality::HIGH ? "geometric" : "photometric");
       active_thread_ = &fuser;
       fuser.Start();
       fuser.Wait();
       active_thread_ = nullptr;
 
-      std::cout << "Writing output: " << JoinPaths(dense_path, "fused.ply")
-                << std::endl;
-      WritePlyBinary(JoinPaths(dense_path, "fused.ply"),
-                     fuser.GetFusedPoints());
+      std::cout << "Writing output: " << fused_path << std::endl;
+      WriteBinaryPlyPoints(fused_path, fuser.GetFusedPoints());
+      mvs::WritePointsVisibility(fused_path + ".vis",
+                                 fuser.GetFusedPointsVisibility());
     }
 
     if (IsStopped()) {
       return;
     }
 
-    // Dense meshing.
+    // Surface meshing.
 
-    mvs::PoissonReconstruction(*option_manager_.dense_meshing,
-                               JoinPaths(dense_path, "fused.ply"),
-                               JoinPaths(dense_path, "meshed.ply"));
+    if (!ExistsFile(meshing_path)) {
+      if (options_.mesher == Mesher::POISSON) {
+        mvs::PoissonMeshing(*option_manager_.poisson_meshing, fused_path,
+                            meshing_path);
+      } else if (options_.mesher == Mesher::DELAUNAY) {
+#ifdef CGAL_ENABLED
+        mvs::DenseDelaunayMeshing(*option_manager_.delaunay_meshing, dense_path,
+                                  meshing_path);
+#else   // CGAL_ENABLED
+        std::cout << std::endl
+                  << "WARNING: Skipping Delaunay meshing because CGAL is "
+                     "not available."
+                  << std::endl;
+        return;
+#endif  // CGAL_ENABLED
+      }
+    }
   }
 }
 

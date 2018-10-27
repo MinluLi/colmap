@@ -1,18 +1,33 @@
-// COLMAP - Structure-from-Motion and Multi-View Stereo.
-// Copyright (C) 2017  Johannes L. Schoenberger <jsch at inf.ethz.ch>
+// Copyright (c) 2018, ETH Zurich and UNC Chapel Hill.
+// All rights reserved.
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
 //
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//
+//     * Neither the name of ETH Zurich and UNC Chapel Hill nor the names of
+//       its contributors may be used to endorse or promote products derived
+//       from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+//
+// Author: Johannes L. Schoenberger (jsch at inf.ethz.ch)
 
 #ifndef COLMAP_SRC_UTIL_CACHE_H_
 #define COLMAP_SRC_UTIL_CACHE_H_
@@ -51,6 +66,9 @@ class LRUCache {
   // Pop least recently used element from cache.
   virtual void Pop();
 
+  // Clear all elements from cache.
+  virtual void Clear();
+
  protected:
   typedef typename std::pair<key_t, value_t> key_value_pair_t;
   typedef typename std::list<key_value_pair_t>::iterator list_iterator_t;
@@ -81,9 +99,11 @@ class MemoryConstrainedLRUCache : public LRUCache<key_t, value_t> {
 
   size_t NumBytes() const;
   size_t MaxNumBytes() const;
+  void UpdateNumBytes(const key_t& key);
 
   void Set(const key_t& key, value_t&& value) override;
   void Pop() override;
+  void Clear() override;
 
  private:
   using typename LRUCache<key_t, value_t>::key_value_pair_t;
@@ -95,6 +115,7 @@ class MemoryConstrainedLRUCache : public LRUCache<key_t, value_t> {
 
   const size_t max_num_bytes_;
   size_t num_bytes_;
+  std::unordered_map<key_t, size_t> elems_num_bytes_;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -167,6 +188,12 @@ void LRUCache<key_t, value_t>::Pop() {
 }
 
 template <typename key_t, typename value_t>
+void LRUCache<key_t, value_t>::Clear() {
+  elems_list_.clear();
+  elems_map_.clear();
+}
+
+template <typename key_t, typename value_t>
 MemoryConstrainedLRUCache<key_t, value_t>::MemoryConstrainedLRUCache(
     const size_t max_num_bytes,
     const std::function<value_t(const key_t&)>& getter_func)
@@ -197,7 +224,9 @@ void MemoryConstrainedLRUCache<key_t, value_t>::Set(const key_t& key,
   }
   elems_map_[key] = elems_list_.begin();
 
-  num_bytes_ += value.NumBytes();
+  const size_t num_bytes = value.NumBytes();
+  num_bytes_ += num_bytes;
+  elems_num_bytes_.emplace(key, num_bytes);
 
   while (num_bytes_ > max_num_bytes_ && elems_map_.size() > 1) {
     Pop();
@@ -209,10 +238,33 @@ void MemoryConstrainedLRUCache<key_t, value_t>::Pop() {
   if (!elems_list_.empty()) {
     auto last = elems_list_.end();
     --last;
-    num_bytes_ -= last->second.NumBytes();
+    num_bytes_ -= elems_num_bytes_.at(last->first);
+    CHECK_GE(num_bytes_, 0);
+    elems_num_bytes_.erase(last->first);
     elems_map_.erase(last->first);
     elems_list_.pop_back();
   }
+}
+
+template <typename key_t, typename value_t>
+void MemoryConstrainedLRUCache<key_t, value_t>::UpdateNumBytes(
+    const key_t& key) {
+  auto& num_bytes = elems_num_bytes_.at(key);
+  num_bytes_ -= num_bytes;
+  CHECK_GE(num_bytes_, 0);
+  num_bytes = LRUCache<key_t, value_t>::Get(key).NumBytes();
+  num_bytes_ += num_bytes;
+
+  while (num_bytes_ > max_num_bytes_ && elems_map_.size() > 1) {
+    Pop();
+  }
+}
+
+template <typename key_t, typename value_t>
+void MemoryConstrainedLRUCache<key_t, value_t>::Clear() {
+  LRUCache<key_t, value_t>::Clear();
+  num_bytes_ = 0;
+  elems_num_bytes_.clear();
 }
 
 }  // namespace colmap

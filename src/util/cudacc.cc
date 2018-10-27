@@ -1,18 +1,33 @@
-// COLMAP - Structure-from-Motion and Multi-View Stereo.
-// Copyright (C) 2017  Johannes L. Schoenberger <jsch at inf.ethz.ch>
+// Copyright (c) 2018, ETH Zurich and UNC Chapel Hill.
+// All rights reserved.
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
 //
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//
+//     * Neither the name of ETH Zurich and UNC Chapel Hill nor the names of
+//       its contributors may be used to endorse or promote products derived
+//       from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+//
+// Author: Johannes L. Schoenberger (jsch at inf.ethz.ch)
 
 #include "util/cudacc.h"
 
@@ -35,32 +50,43 @@ void CudaTimer::Print(const std::string& message) {
   CUDA_SAFE_CALL(cudaEventRecord(stop_, 0));
   CUDA_SAFE_CALL(cudaEventSynchronize(stop_));
   CUDA_SAFE_CALL(cudaEventElapsedTime(&elapsed_time_, start_, stop_));
-  printf("%s: %.4fs\n", message.c_str(), elapsed_time_ / 1000.0f);
+  std::cout << StringPrintf("%s: %.4fs", message.c_str(),
+                            elapsed_time_ / 1000.0f)
+            << std::endl;
 }
 
 void CudaSafeCall(const cudaError_t error, const std::string& file,
                   const int line) {
   if (error != cudaSuccess) {
-    printf("%s in %s at line %i\n", cudaGetErrorString(error), file.c_str(),
-           line);
+    std::cerr << StringPrintf("CUDA error at %s:%i - %s", file.c_str(), line,
+                              cudaGetErrorString(error))
+              << std::endl;
     exit(EXIT_FAILURE);
   }
 }
 
-void CudaCheckError(const char* file, const int line) {
-  cudaError error = cudaGetLastError();
-  if (cudaSuccess != error) {
-    fprintf(stderr, "cudaCheckError() failed at %s:%i : %s\n", file, line,
-            cudaGetErrorString(error));
+void CudaCheck(const char* file, const int line) {
+  const cudaError error = cudaGetLastError();
+  while (error != cudaSuccess) {
+    std::cerr << StringPrintf("CUDA error at %s:%i - %s", file, line,
+                              cudaGetErrorString(error))
+              << std::endl;
     exit(EXIT_FAILURE);
   }
+}
 
-  // More careful checking. However, this will affect performance.
-  // Comment away if needed.
-  error = cudaDeviceSynchronize();
+void CudaSyncAndCheck(const char* file, const int line) {
+  // Synchronizes the default stream which is a nullptr.
+  const cudaError error = cudaStreamSynchronize(nullptr);
   if (cudaSuccess != error) {
-    fprintf(stderr, "cudaCheckError() with sync failed at %s:%i : %s\n", file,
-            line, cudaGetErrorString(error));
+    std::cerr << StringPrintf("CUDA error at %s:%i - %s", file, line,
+                              cudaGetErrorString(error))
+              << std::endl;
+    std::cerr
+        << "This error is likely caused by the graphics card timeout "
+           "detection mechanism of your operating system. Please refer to "
+           "the FAQ in the documentation on how to solve this problem."
+        << std::endl;
     exit(EXIT_FAILURE);
   }
 }

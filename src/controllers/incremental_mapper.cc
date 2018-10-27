@@ -1,18 +1,33 @@
-// COLMAP - Structure-from-Motion and Multi-View Stereo.
-// Copyright (C) 2017  Johannes L. Schoenberger <jsch at inf.ethz.ch>
+// Copyright (c) 2018, ETH Zurich and UNC Chapel Hill.
+// All rights reserved.
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
 //
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//
+//     * Neither the name of ETH Zurich and UNC Chapel Hill nor the names of
+//       its contributors may be used to endorse or promote products derived
+//       from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+//
+// Author: Johannes L. Schoenberger (jsch at inf.ethz.ch)
 
 #include "controllers/incremental_mapper.h"
 
@@ -21,7 +36,7 @@
 namespace colmap {
 namespace {
 
-size_t TriangulateImage(const IncrementalMapperController::Options& options,
+size_t TriangulateImage(const IncrementalMapperOptions& options,
                         const Image& image, IncrementalMapper* mapper) {
   std::cout << "  => Continued observations: " << image.NumPoints3D()
             << std::endl;
@@ -31,9 +46,9 @@ size_t TriangulateImage(const IncrementalMapperController::Options& options,
   return num_tris;
 }
 
-void AdjustGlobalBundle(const IncrementalMapperController::Options& options,
+void AdjustGlobalBundle(const IncrementalMapperOptions& options,
                         IncrementalMapper* mapper) {
-  BundleAdjuster::Options custom_options = options.GlobalBundleAdjustment();
+  BundleAdjustmentOptions custom_options = options.GlobalBundleAdjustment();
 
   const size_t num_reg_images = mapper->GetReconstruction().NumRegImages();
 
@@ -49,18 +64,18 @@ void AdjustGlobalBundle(const IncrementalMapperController::Options& options,
 
   PrintHeading1("Global bundle adjustment");
   if (options.ba_global_use_pba && num_reg_images >= kMinNumRegImages &&
-      ParallelBundleAdjuster::IsReconstructionSupported(
-          mapper->GetReconstruction())) {
+      ParallelBundleAdjuster::IsSupported(custom_options,
+                                          mapper->GetReconstruction())) {
     mapper->AdjustParallelGlobalBundle(
-        options.ParallelGlobalBundleAdjustment());
+        custom_options, options.ParallelGlobalBundleAdjustment());
   } else {
     mapper->AdjustGlobalBundle(custom_options);
   }
 }
 
-void IterativeLocalRefinement(
-    const IncrementalMapperController::Options& options, const image_t image_id,
-    IncrementalMapper* mapper) {
+void IterativeLocalRefinement(const IncrementalMapperOptions& options,
+                              const image_t image_id,
+                              IncrementalMapper* mapper) {
   auto ba_options = options.LocalBundleAdjustment();
   for (int i = 0; i < options.ba_local_max_refinements; ++i) {
     const auto report = mapper->AdjustLocalBundle(
@@ -83,14 +98,13 @@ void IterativeLocalRefinement(
     }
     // Only use robust cost function for first iteration.
     ba_options.loss_function_type =
-        BundleAdjuster::Options::LossFunctionType::TRIVIAL;
+        BundleAdjustmentOptions::LossFunctionType::TRIVIAL;
   }
   mapper->ClearModifiedPoints3D();
 }
 
-void IterativeGlobalRefinement(
-    const IncrementalMapperController::Options& options,
-    IncrementalMapper* mapper) {
+void IterativeGlobalRefinement(const IncrementalMapperOptions& options,
+                               IncrementalMapper* mapper) {
   PrintHeading1("Retriangulation");
   CompleteAndMergeTracks(options, mapper);
   std::cout << "  => Retriangulated observations: "
@@ -143,7 +157,7 @@ void WriteSnapshot(const Reconstruction& reconstruction,
 
 }  // namespace
 
-size_t FilterPoints(const IncrementalMapperController::Options& options,
+size_t FilterPoints(const IncrementalMapperOptions& options,
                     IncrementalMapper* mapper) {
   const size_t num_filtered_observations =
       mapper->FilterPoints(options.Mapper());
@@ -152,16 +166,15 @@ size_t FilterPoints(const IncrementalMapperController::Options& options,
   return num_filtered_observations;
 }
 
-size_t FilterImages(const IncrementalMapperController::Options& options,
+size_t FilterImages(const IncrementalMapperOptions& options,
                     IncrementalMapper* mapper) {
   const size_t num_filtered_images = mapper->FilterImages(options.Mapper());
   std::cout << "  => Filtered images: " << num_filtered_images << std::endl;
   return num_filtered_images;
 }
 
-size_t CompleteAndMergeTracks(
-    const IncrementalMapperController::Options& options,
-    IncrementalMapper* mapper) {
+size_t CompleteAndMergeTracks(const IncrementalMapperOptions& options,
+                              IncrementalMapper* mapper) {
   const size_t num_completed_observations =
       mapper->CompleteTracks(options.Triangulation());
   std::cout << "  => Merged observations: " << num_completed_observations
@@ -173,8 +186,7 @@ size_t CompleteAndMergeTracks(
   return num_completed_observations + num_merged_observations;
 }
 
-IncrementalMapper::Options IncrementalMapperController::Options::Mapper()
-    const {
+IncrementalMapper::Options IncrementalMapperOptions::Mapper() const {
   IncrementalMapper::Options options = mapper;
   options.abs_pose_refine_focal_length = ba_refine_focal_length;
   options.abs_pose_refine_extra_params = ba_refine_extra_params;
@@ -185,8 +197,8 @@ IncrementalMapper::Options IncrementalMapperController::Options::Mapper()
   return options;
 }
 
-IncrementalTriangulator::Options
-IncrementalMapperController::Options::Triangulation() const {
+IncrementalTriangulator::Options IncrementalMapperOptions::Triangulation()
+    const {
   IncrementalTriangulator::Options options = triangulation;
   options.min_focal_length_ratio = min_focal_length_ratio;
   options.max_focal_length_ratio = max_focal_length_ratio;
@@ -194,9 +206,9 @@ IncrementalMapperController::Options::Triangulation() const {
   return options;
 }
 
-BundleAdjuster::Options
-IncrementalMapperController::Options::LocalBundleAdjustment() const {
-  BundleAdjuster::Options options;
+BundleAdjustmentOptions IncrementalMapperOptions::LocalBundleAdjustment()
+    const {
+  BundleAdjustmentOptions options;
   options.solver_options.function_tolerance = 0.0;
   options.solver_options.gradient_tolerance = 10.0;
   options.solver_options.parameter_tolerance = 0.0;
@@ -204,20 +216,22 @@ IncrementalMapperController::Options::LocalBundleAdjustment() const {
   options.solver_options.max_linear_solver_iterations = 100;
   options.solver_options.minimizer_progress_to_stdout = false;
   options.solver_options.num_threads = num_threads;
+#if CERES_VERSION_MAJOR < 2
   options.solver_options.num_linear_solver_threads = num_threads;
+#endif  // CERES_VERSION_MAJOR
   options.print_summary = true;
   options.refine_focal_length = ba_refine_focal_length;
   options.refine_principal_point = ba_refine_principal_point;
   options.refine_extra_params = ba_refine_extra_params;
   options.loss_function_scale = 1.0;
   options.loss_function_type =
-      BundleAdjuster::Options::LossFunctionType::CAUCHY;
+      BundleAdjustmentOptions::LossFunctionType::SOFT_L1;
   return options;
 }
 
-BundleAdjuster::Options
-IncrementalMapperController::Options::GlobalBundleAdjustment() const {
-  BundleAdjuster::Options options;
+BundleAdjustmentOptions IncrementalMapperOptions::GlobalBundleAdjustment()
+    const {
+  BundleAdjustmentOptions options;
   options.solver_options.function_tolerance = 0.0;
   options.solver_options.gradient_tolerance = 1.0;
   options.solver_options.parameter_tolerance = 0.0;
@@ -225,18 +239,20 @@ IncrementalMapperController::Options::GlobalBundleAdjustment() const {
   options.solver_options.max_linear_solver_iterations = 100;
   options.solver_options.minimizer_progress_to_stdout = true;
   options.solver_options.num_threads = num_threads;
+#if CERES_VERSION_MAJOR < 2
   options.solver_options.num_linear_solver_threads = num_threads;
+#endif  // CERES_VERSION_MAJOR
   options.print_summary = true;
   options.refine_focal_length = ba_refine_focal_length;
   options.refine_principal_point = ba_refine_principal_point;
   options.refine_extra_params = ba_refine_extra_params;
   options.loss_function_type =
-      BundleAdjuster::Options::LossFunctionType::TRIVIAL;
+      BundleAdjustmentOptions::LossFunctionType::TRIVIAL;
   return options;
 }
 
 ParallelBundleAdjuster::Options
-IncrementalMapperController::Options::ParallelGlobalBundleAdjustment() const {
+IncrementalMapperOptions::ParallelGlobalBundleAdjustment() const {
   ParallelBundleAdjuster::Options options;
   options.max_num_iterations = ba_global_max_num_iterations;
   options.print_summary = true;
@@ -245,7 +261,7 @@ IncrementalMapperController::Options::ParallelGlobalBundleAdjustment() const {
   return options;
 }
 
-bool IncrementalMapperController::Options::Check() const {
+bool IncrementalMapperOptions::Check() const {
   CHECK_OPTION_GT(min_num_matches, 0);
   CHECK_OPTION_GT(max_num_models, 0);
   CHECK_OPTION_GT(max_model_overlap, 0);
@@ -272,8 +288,8 @@ bool IncrementalMapperController::Options::Check() const {
 }
 
 IncrementalMapperController::IncrementalMapperController(
-    const IncrementalMapperController::Options* options,
-    const std::string& image_path, const std::string& database_path,
+    const IncrementalMapperOptions* options, const std::string& image_path,
+    const std::string& database_path,
     ReconstructionManager* reconstruction_manager)
     : options_(options),
       image_path_(image_path),

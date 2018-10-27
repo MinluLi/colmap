@@ -1,18 +1,33 @@
-// COLMAP - Structure-from-Motion and Multi-View Stereo.
-// Copyright (C) 2017  Johannes L. Schoenberger <jsch at inf.ethz.ch>
+// Copyright (c) 2018, ETH Zurich and UNC Chapel Hill.
+// All rights reserved.
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
 //
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//
+//     * Neither the name of ETH Zurich and UNC Chapel Hill nor the names of
+//       its contributors may be used to endorse or promote products derived
+//       from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+//
+// Author: Johannes L. Schoenberger (jsch at inf.ethz.ch)
 
 #define TEST_NAME "base/camera_models"
 #include "util/testing.h"
@@ -30,8 +45,8 @@ void TestWorldToImageToWorld(const std::vector<double> params, const double u0,
   BOOST_CHECK_EQUAL(x, xx);
   BOOST_CHECK_EQUAL(y, yy);
   CameraModel::ImageToWorld(params.data(), x, y, &u, &v);
-  BOOST_CHECK(std::abs(u - u0) < 1e-6);
-  BOOST_CHECK(std::abs(v - v0) < 1e-6);
+  BOOST_CHECK_LT(std::abs(u - u0), 1e-6);
+  BOOST_CHECK_LT(std::abs(v - v0), 1e-6);
 }
 
 template <typename CameraModel>
@@ -43,17 +58,16 @@ void TestImageToWorldToImage(const std::vector<double> params, const double x0,
   BOOST_CHECK_EQUAL(u, uu);
   BOOST_CHECK_EQUAL(v, vv);
   CameraModel::WorldToImage(params.data(), u, v, &x, &y);
-  BOOST_CHECK(std::abs(x - x0) < 1e-6);
-  BOOST_CHECK(std::abs(y - y0) < 1e-6);
+  BOOST_CHECK_LT(std::abs(x - x0), 1e-6);
+  BOOST_CHECK_LT(std::abs(y - y0), 1e-6);
 }
 
 template <typename CameraModel>
 void TestModel(const std::vector<double>& params) {
   BOOST_CHECK(CameraModelVerifyParams(CameraModel::model_id, params));
 
-  std::vector<double> default_params;
-  CameraModelInitializeParams(CameraModel::model_id, 100, 100, 100,
-                              &default_params);
+  const std::vector<double> default_params =
+      CameraModelInitializeParams(CameraModel::model_id, 100, 100, 100);
   BOOST_CHECK(CameraModelVerifyParams(CameraModel::model_id, default_params));
 
   BOOST_CHECK_EQUAL(CameraModelParamsInfo(CameraModel::model_id),
@@ -64,6 +78,8 @@ void TestModel(const std::vector<double>& params) {
                     &CameraModel::principal_point_idxs);
   BOOST_CHECK_EQUAL(&CameraModelExtraParamsIdxs(CameraModel::model_id),
                     &CameraModel::extra_params_idxs);
+  BOOST_CHECK_EQUAL(CameraModelNumParams(CameraModel::model_id),
+                    CameraModel::num_params);
 
   BOOST_CHECK(!CameraModelHasBogusParams(CameraModel::model_id, default_params,
                                          100, 100, 0.1, 2.0, 1.0));
@@ -83,6 +99,12 @@ void TestModel(const std::vector<double>& params) {
   BOOST_CHECK_EQUAL(CameraModelImageToWorldThreshold(CameraModel::model_id,
                                                      default_params, 1),
                     1.0 / 100.0);
+
+  BOOST_CHECK(ExistsCameraModelWithName(CameraModel::model_name));
+  BOOST_CHECK(!ExistsCameraModelWithName(CameraModel::model_name + "FOO"));
+
+  BOOST_CHECK(ExistsCameraModelWithId(CameraModel::model_id));
+  BOOST_CHECK(!ExistsCameraModelWithId(CameraModel::model_id + 123456789));
 
   BOOST_CHECK_EQUAL(
       CameraModelNameToId(CameraModelIdToName(CameraModel::model_id)),
@@ -160,8 +182,14 @@ BOOST_AUTO_TEST_CASE(TestFOV) {
   TestModel<FOVCameraModel>(params);
   params[4] = 0;
   TestModel<FOVCameraModel>(params);
-  params[4] = 1e-8;
+  params[4] = 1e-6;
   TestModel<FOVCameraModel>(params);
+  params[4] = 1e-2;
+  TestModel<FOVCameraModel>(params);
+  BOOST_CHECK_EQUAL(
+      CameraModelInitializeParams(FOVCameraModel::model_id, 100, 100, 100)
+          .back(),
+      1e-2);
 }
 
 BOOST_AUTO_TEST_CASE(TestSimpleRadialFisheye) {

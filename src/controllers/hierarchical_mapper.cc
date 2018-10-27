@@ -1,18 +1,33 @@
-// COLMAP - Structure-from-Motion and Multi-View Stereo.
-// Copyright (C) 2017  Johannes L. Schoenberger <jsch at inf.ethz.ch>
+// Copyright (c) 2018, ETH Zurich and UNC Chapel Hill.
+// All rights reserved.
 //
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
 //
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
 //
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//
+//     * Neither the name of ETH Zurich and UNC Chapel Hill nor the names of
+//       its contributors may be used to endorse or promote products derived
+//       from this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+//
+// Author: Johannes L. Schoenberger (jsch at inf.ethz.ch)
 
 #include "controllers/hierarchical_mapper.h"
 
@@ -44,8 +59,8 @@ void MergeClusters(
     bool merge_success = false;
     for (size_t i = 0; i < reconstructions.size(); ++i) {
       for (size_t j = 0; j < i; ++j) {
-        const int kMinCommonImages = 3;
-        if (reconstructions[i]->Merge(*reconstructions[j], kMinCommonImages)) {
+        const double kMaxReprojError = 8.0;
+        if (reconstructions[i]->Merge(*reconstructions[j], kMaxReprojError)) {
           reconstructions.erase(reconstructions.begin() + j);
           merge_success = true;
           break;
@@ -86,7 +101,7 @@ bool HierarchicalMapperController::Options::Check() const {
 
 HierarchicalMapperController::HierarchicalMapperController(
     const Options& options, const SceneClustering::Options& clustering_options,
-    const IncrementalMapperController::Options& mapper_options,
+    const IncrementalMapperOptions& mapper_options,
     ReconstructionManager* reconstruction_manager)
     : options_(options),
       clustering_options_(clustering_options),
@@ -121,7 +136,7 @@ void HierarchicalMapperController::Run() {
     std::cout << "Reading scene graph..." << std::endl;
     std::vector<std::pair<image_t, image_t>> image_pairs;
     std::vector<int> num_inliers;
-    database.ReadInlierMatchesGraph(&image_pairs, &num_inliers);
+    database.ReadTwoViewGeometryNumInliers(&image_pairs, &num_inliers);
 
     std::cout << "Partitioning scene graph..." << std::endl;
     scene_clustering.Partition(image_pairs, num_inliers);
@@ -166,7 +181,7 @@ void HierarchicalMapperController::Run() {
       return;
     }
 
-    IncrementalMapperController::Options custom_options = mapper_options_;
+    IncrementalMapperOptions custom_options = mapper_options_;
     custom_options.max_model_overlap = 3;
     custom_options.init_num_trials = options_.init_num_trials;
     custom_options.num_threads = num_threads_per_worker;
@@ -182,8 +197,6 @@ void HierarchicalMapperController::Run() {
     mapper.Wait();
   };
 
-  ThreadPool thread_pool(num_eff_workers);
-
   // Start reconstructing the bigger clusters first for resource usage.
   std::sort(leaf_clusters.begin(), leaf_clusters.end(),
             [](const SceneClustering::Cluster* cluster1,
@@ -196,6 +209,8 @@ void HierarchicalMapperController::Run() {
   std::unordered_map<const SceneClustering::Cluster*, ReconstructionManager>
       reconstruction_managers;
   reconstruction_managers.reserve(leaf_clusters.size());
+
+  ThreadPool thread_pool(num_eff_workers);
   for (const auto& cluster : leaf_clusters) {
     thread_pool.AddTask(ReconstructCluster, *cluster,
                         &reconstruction_managers[cluster]);
